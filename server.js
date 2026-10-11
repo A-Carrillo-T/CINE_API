@@ -1,52 +1,119 @@
-// server.js
-// IMPORTANTE: dotenv debe cargarse antes que cualquier require que dependa de process.env
-// (por eso "./app/models" se importa mas abajo, despues de esta seccion).
 const dotenv = require("dotenv");
-const envFile = process.env.NODE_ENV === "production" ? ".env.production" : ".env.development";
+
+const envFile =
+  process.env.NODE_ENV === "production"
+    ? ".env.production"
+    : ".env.development";
+
 dotenv.config({ path: envFile });
 
 const express = require("express");
-const bodyParser = require("body-parser");
 const cors = require("cors");
 
 const app = express();
 
-var corsOptions = {
+
+// ======================================================
+// CORS
+// ======================================================
+
+const corsOptions = {
   origin: process.env.CORS_ORIGIN || "http://localhost:3000"
 };
 
 app.use(cors(corsOptions));
 
-// El endpoint de webhook de Stripe necesita el body crudo (raw), no parseado como
-// JSON, porque Stripe firma el cuerpo exacto de la solicitud. Por eso se registra
-// ANTES de bodyParser.json(); el resto de rutas de /api/pago sí usan JSON normal.
-app.post("/api/pago/webhook", express.raw({ type: "application/json" }),
+
+// ======================================================
+// STRIPE WEBHOOK
+// IMPORTANTE: DEBE IR ANTES DE express.json()
+// ======================================================
+
+app.post(
+  "/api/pago/webhook",
+  express.raw({ type: "application/json" }),
   require("./app/controllers/pago.controller.js").webhook
 );
 
-// Parsear requests de tipo application/json
-app.use(bodyParser.json());
 
-// Parsear requests de tipo application/x-www-form-urlencoded
-app.use(bodyParser.urlencoded({ extended: true }));
+// ======================================================
+// PARSERS PARA EL RESTO DE LA API
+// ======================================================
+
+app.use(express.json());
+
+app.use(
+  express.urlencoded({
+    extended: true
+  })
+);
+
+
+// ======================================================
+// BASE DE DATOS
+// ======================================================
 
 const db = require("./app/models");
+
 db.sequelize.sync();
-// // Si necesitas recrear las tablas desde cero (¡cuidado, borra los datos!):
-// db.sequelize.sync({ force: true }).then(() => {
-//   console.log("Drop and re-sync db.");
-// });
 
-// Libera asientos de ventas "pending" que superaron el tiempo de reserva
-// (SALE_HOLD_MINUTES, 10 minutos por defecto). Corre cada minuto.
-const expirePendingSales = require("./app/jobs/expireSales.job.js")(db);
-setInterval(expirePendingSales, 60 * 1000);
-expirePendingSales(); // tambien se corre una vez al arrancar el servidor
+app.use((req, res, next) => {
 
-// Ruta simple de prueba, confirma que el servidor y el ambiente estan bien configurados
-app.get("/", (req, res) => {
-  res.json({ message: "DERCAS - Cine API", ambiente: process.env.NODE_ENV || "development" });
+  console.log("============== REQUEST ==============");
+  console.log("URL:", req.url);
+  console.log("METHOD:", req.method);
+  console.log("CONTENT-TYPE:", req.headers["content-type"]);
+  console.log("BODY:", req.body);
+  console.log("=====================================");
+
+  next();
+
 });
+
+
+// ======================================================
+// RUTAS DE COMIDA
+// ======================================================
+
+const foodRoutes = require("./app/routes/food.routes");
+const foodCategoryRoutes = require("./app/routes/foodCategory.routes");
+const foodOrderRoutes = require("./app/routes/foodOrder.routes");
+
+app.use("/api/foods", foodRoutes);
+app.use("/api/food-categories", foodCategoryRoutes);
+app.use("/api/food-orders", foodOrderRoutes
+);
+
+
+// ======================================================
+// JOB VENTAS PENDIENTES
+// ======================================================
+
+const expirePendingSales =
+  require("./app/jobs/expireSales.job.js")(db);
+
+setInterval(expirePendingSales, 60 * 1000);
+
+expirePendingSales();
+
+
+// ======================================================
+// RUTA PRINCIPAL
+// ======================================================
+
+app.get("/", (req, res) => {
+
+  res.json({
+    message: "DERCAS - Cine API",
+    ambiente: process.env.NODE_ENV || "development"
+  });
+
+});
+
+
+// ======================================================
+// RUTAS EXISTENTES
+// ======================================================
 
 require("./app/routes/auth.route")(app);
 require("./app/routes/movie.route")(app);
@@ -60,7 +127,19 @@ require("./app/routes/sale.route")(app);
 require("./app/routes/pago.route")(app);
 require("./app/routes/review.route")(app);
 
+
+// ======================================================
+// SERVIDOR
+// ======================================================
+
 const PORT = process.env.PORT || 8081;
+
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT} [ambiente: ${process.env.NODE_ENV || "development"}].`);
+
+  console.log(
+    `Server is running on port ${PORT} [ambiente: ${
+      process.env.NODE_ENV || "development"
+    }].`
+  );
+
 });
